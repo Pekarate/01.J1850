@@ -74,6 +74,58 @@ volatile bool eofDetected = false;
 unsigned long messagesShown = 0;
 uint32_t lastActivityTime = 0;
 
+
+
+
+// Định nghĩa các hằng số
+#define TC_FREQ 1000000 // Tần số timer (1 MHz = 1 tick mỗi micro giây)
+#define CPU_HZ 84000000 // Tần số CPU của Arduino Due (84 MHz)
+
+// Biến toàn cục
+volatile bool timerFlag = false; // Cờ ngắt
+
+// Hàm cấu hình Timer Counter (TC0, channel 0)
+void setupTimer() {
+  // Kích hoạt clock cho TC0
+  PMC->PMC_PCER0 = (1 << ID_TC0); // ID_TC0 là định danh cho TC0, channel 0
+
+  // Cấu hình TC0, channel 0
+  TC0->TC_CHANNEL[0].TC_CMR = TC_CMR_TCCLKS_TIMER_CLOCK1 | // Sử dụng CLOCK1 (MCK/2)
+                              TC_CMR_WAVE |                // Chế độ waveform
+                              TC_CMR_WAVSEL_UP_RC;         // Đếm lên đến RC
+
+  // Kích hoạt ngắt khi đạt RC
+  TC0->TC_CHANNEL[0].TC_IER = TC_IER_CPCS;
+  TC0->TC_CHANNEL[0].TC_IDR = ~TC_IER_CPCS; // Tắt các ngắt khác
+
+  // Kích hoạt ngắt trong NVIC
+  NVIC_EnableIRQ(TC0_IRQn);
+}
+
+// Hàm khởi động Timer Counter với thời gian đếm (micro giây)
+void startTimer(uint32_t time) {
+  // Đặt giá trị RC tương ứng với thời gian (1 tick = 1 us)
+  uint32_t rc = (CPU_HZ / 2) / TC_FREQ * time; // CLOCK1 = MCK/2 = 42 MHz
+  TC0->TC_CHANNEL[0].TC_RC = rc;
+
+  // Khởi động timer
+  TC0->TC_CHANNEL[0].TC_CCR = TC_CCR_CLKEN | TC_CCR_SWTRG;
+}
+
+// Hàm xử lý ngắt
+void TC0_Handler() {
+  // Đọc thanh ghi trạng thái để xóa cờ ngắt
+  TC0->TC_CHANNEL[0].TC_SR;
+
+  // Luôn dừng timer sau ngắt
+  TC0->TC_CHANNEL[0].TC_CCR = TC_CCR_CLKDIS;
+  timerFlag = true;
+  if (bitIndex >= MIN_VALID_BITS) {
+    queueMessageFromISR();
+  } else {
+    resetMessageCollection();
+  }
+}
 // ============================================================================
 // SETUP FUNCTION
 // ============================================================================
@@ -93,7 +145,7 @@ void setup() {
   // Initialize timing
   lastTime = micros();
   lastActivityTime = millis();
-  
+  setupTimer();
   attachInterrupt(J1850_PWM_RX, handlePWMInput, CHANGE);
 
   Serial.println("Ready to receive J1850 PWM data...");
@@ -148,11 +200,11 @@ void handlePWMInput() {
         // We'll decode the bit on the falling edge
       } else if (bitTime > BIT_TIME_MAX_US) {
         // Gap too long - end of message or start of new frame
-        if (bitIndex >= MIN_VALID_BITS) {
-          queueMessageFromISR();
-        } else {
-          resetMessageCollection();
-        }
+        // if (bitIndex >= MIN_VALID_BITS) {
+        //   queueMessageFromISR();
+        // } else {
+        //   resetMessageCollection();
+        // }
       }
     }
     
@@ -191,8 +243,9 @@ void handlePWMInput() {
       // Decode bit based on active pulse width - Tp1 and Tp2
       if (activePulseWidth >= BIT_1_ACTIVE_MIN_US && activePulseWidth <= BIT_1_ACTIVE_MAX_US) {
         addBitToMessage(1, lastRisingEdge);
+        startTimer(25); // Restart timer for next bit
       } else if (activePulseWidth >= BIT_0_ACTIVE_MIN_US && activePulseWidth <= BIT_0_ACTIVE_MAX_US) {
-        addBitToMessage(0, lastRisingEdge);
+        startTimer(25); // Restart timer for next bit
       }
     }
   }
