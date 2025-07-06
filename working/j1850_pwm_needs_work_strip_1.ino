@@ -141,8 +141,8 @@ void handlePWMInput() {
     lastRisingEdge = now;
     
     // Check for bit timing (rising edge to rising edge)
-    if (collectingMessage && lastRisingEdge > 0) {
-      uint32_t bitTime = now - lastRisingEdge;
+    if (collectingMessage && lastFallingEdge > 0) {
+      uint32_t bitTime = now - lastFallingEdge;
       if (bitTime >= BIT_TIME_MIN_US && bitTime <= BIT_TIME_MAX_US) {
         // Valid bit timing - the active pulse width will determine bit value
         // We'll decode the bit on the falling edge
@@ -203,17 +203,17 @@ void handlePWMInput() {
 // ============================================================================
 void handleSOFDetection(uint32_t now) {
   // If we were collecting a message, finish it first
-  if (collectingMessage && bitIndex >= MIN_VALID_BITS) {
-    queueMessageFromISR();
-  } else {
-    resetMessageCollection();
-  }
+  // if (collectingMessage && bitIndex >= MIN_VALID_BITS) {
+  //   queueMessageFromISR();
+  // } else {
+  //   resetMessageCollection();
+  // }
 
   startNewMessage(now);
   
   // SOF is typically a '1' bit - add it to the message
   // The SOF active pulse itself represents the first bit
-  addBitToMessage(1, now);
+  // addBitToMessage(1, now);
 }
 
 void handleEOFDetection(uint32_t now) {
