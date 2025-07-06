@@ -77,55 +77,60 @@ uint32_t lastActivityTime = 0;
 
 
 
-// Định nghĩa các hằng số
-#define TC_FREQ 1000000 // Tần số timer (1 MHz = 1 tick mỗi micro giây)
-#define CPU_HZ 84000000 // Tần số CPU của Arduino Due (84 MHz)
+#define TC           TC0
+#define CHANNEL      0
+#define IRQ          TC0_IRQn
+#define ID_TC        ID_TC0
 
-// Biến toàn cục
-volatile bool timerFlag = false; // Cờ ngắt
+volatile bool timerFired = false;
+volatile uint32_t timerStartUs = 0;
+volatile uint32_t timerEndUs = 0;
 
-// Hàm cấu hình Timer Counter (TC0, channel 0)
-void setupTimer() {
-  // Kích hoạt clock cho TC0
-  PMC->PMC_PCER0 = (1 << ID_TC0); // ID_TC0 là định danh cho TC0, channel 0
-
-  // Cấu hình TC0, channel 0
-  TC0->TC_CHANNEL[0].TC_CMR = TC_CMR_TCCLKS_TIMER_CLOCK1 | // Sử dụng CLOCK1 (MCK/2)
-                              TC_CMR_WAVE |                // Chế độ waveform
-                              TC_CMR_WAVSEL_UP_RC;         // Đếm lên đến RC
-
-  // Kích hoạt ngắt khi đạt RC
-  TC0->TC_CHANNEL[0].TC_IER = TC_IER_CPCS;
-  TC0->TC_CHANNEL[0].TC_IDR = ~TC_IER_CPCS; // Tắt các ngắt khác
-
-  // Kích hoạt ngắt trong NVIC
-  NVIC_EnableIRQ(TC0_IRQn);
-}
-
-// Hàm khởi động Timer Counter với thời gian đếm (micro giây)
-void startTimer(uint32_t time) {
-  // Đặt giá trị RC tương ứng với thời gian (1 tick = 1 us)
-  uint32_t rc = (CPU_HZ / 2) / TC_FREQ * time; // CLOCK1 = MCK/2 = 42 MHz
-  TC0->TC_CHANNEL[0].TC_RC = rc;
-
-  // Khởi động timer
-  TC0->TC_CHANNEL[0].TC_CCR = TC_CCR_CLKEN | TC_CCR_SWTRG;
-}
-
-// Hàm xử lý ngắt
 void TC0_Handler() {
-  // Đọc thanh ghi trạng thái để xóa cờ ngắt
-  TC0->TC_CHANNEL[0].TC_SR;
-
-  // Luôn dừng timer sau ngắt
-  TC0->TC_CHANNEL[0].TC_CCR = TC_CCR_CLKDIS;
-  timerFlag = true;
+  Tc *tc = TC;
+  tc->TC_CHANNEL[CHANNEL].TC_SR; // Đọc để xóa cờ ngắt
+  tc->TC_CHANNEL[CHANNEL].TC_CCR = TC_CCR_CLKDIS;  // ✅ Dừng timer ngay sau ngắt
   if (bitIndex >= MIN_VALID_BITS) {
     queueMessageFromISR();
   } else {
     resetMessageCollection();
   }
 }
+
+// Khởi tạo timer
+void initTimer() {
+  pmc_set_writeprotect(false);
+  pmc_enable_periph_clk(ID_TC);
+
+  Tc *tc = TC;
+  TcChannel *ch = &tc->TC_CHANNEL[CHANNEL];
+
+  ch->TC_CCR = TC_CCR_CLKDIS;
+  ch->TC_IDR = 0xFFFFFFFF;
+  ch->TC_SR;
+
+  ch->TC_CMR = TC_CMR_TCCLKS_TIMER_CLOCK1
+             | TC_CMR_WAVE
+             | TC_CMR_WAVSEL_UP
+             | TC_CMR_ACPA_CLEAR | TC_CMR_ACPC_SET;
+
+  NVIC_EnableIRQ(IRQ);
+}
+
+// Bắt đầu timer với khoảng thời gian us
+void startTimer(uint32_t us) {
+  Tc *tc = TC;
+  TcChannel *ch = &tc->TC_CHANNEL[CHANNEL];
+
+  uint32_t ticks = (42000000 / 1000000) * us; // 42 tick mỗi us
+
+  ch->TC_RC = ticks;
+  ch->TC_IER = TC_IER_CPCS;
+  ch->TC_CCR = TC_CCR_CLKEN | TC_CCR_SWTRG;
+
+  timerStartUs = micros(); // Lưu thời điểm bắt đầu
+}
+
 // ============================================================================
 // SETUP FUNCTION
 // ============================================================================
@@ -145,7 +150,7 @@ void setup() {
   // Initialize timing
   lastTime = micros();
   lastActivityTime = millis();
-  setupTimer();
+  initTimer();
   attachInterrupt(J1850_PWM_RX, handlePWMInput, CHANGE);
 
   Serial.println("Ready to receive J1850 PWM data...");
