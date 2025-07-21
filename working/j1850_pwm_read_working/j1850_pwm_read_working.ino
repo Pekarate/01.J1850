@@ -5,15 +5,17 @@
  * Version: 13.4 - Fixed Duplicate Functions & Capture All Data
  * Date: 2025
  */
-
+// #define ARDUINO_BOARD 
 // ============================================================================
 // SAM3X COMPATIBILITY
 // ============================================================================
+#ifndef ARDUINO_BOARD
 #define Serial SerialUSB
-
+#endif
 // ============================================================================
 // J1850 PWM TIMING CONSTANTS (Based on SAE J1850 Standard Table 3)
 // CRITICAL: All timing is based on RISING EDGES (passive to active transitions)
+
 
 // Timing tolerance for better accuracy
 #define TIMING_TOLERANCE_PERCENT  10    // ±10% tolerance for timing validation
@@ -38,11 +40,22 @@
 #define SOF_ACTIVE_MIN_US 30      // Tp7: Start of Frame active pulse
 #define SOF_ACTIVE_MAX_US 35      // SOF can be quite long
 
+
+// tx timing
+
+#define TX_SOF_TOTAL          48       // Tp7: Total time for Start of Frame transmission
+#define TX_SOF_ACTIVE           32       // Tp7: Start of Frame transmission time
+#define TX_SOF_PASSIVE          (48-32)  // Tp8: Start of Frame transmission time
+#define TX_SHORT         8        // Tp1: Short transmission time for bit "0"
+#define TX_LONG          16       // Tp2: Long transmission time for bit "1"
+#define TX_EOF           72       // Tp5: Long transmission time for End of Frame
+
 // ============================================================================
 #define J1850_PWM_RX               51
 #define PS_J1850_9141              18
 #define J1850_PWM_VPW              19
-
+#define J1850P_TX                  53
+#define J1850N_TX                  54
 // ============================================================================
 // FRAME STRUCTURE
 // ============================================================================
@@ -89,14 +102,17 @@ uint32_t lastActivityTime = 0;
 // SETUP FUNCTION
 // ============================================================================
 void setup() {
+
   Serial.begin(115200);
+#ifndef ARDUINO_BOARD
   while (!Serial);
-  
+#endif
   setupJ1850Hardware();
 
   // Setup J1850_PWM_RX as input WITHOUT pull-up
   pinMode(J1850_PWM_RX, INPUT);
-
+  pinMode(J1850P_TX, OUTPUT);
+  pinMode(J1850N_TX, OUTPUT);
   // Initialize timing
   lastTime = micros();
   lastActivityTime = millis();
@@ -107,7 +123,12 @@ void setup() {
   }
   
   attachInterrupt(J1850_PWM_RX, handlePWMInput, CHANGE);
+
+
 }
+
+
+
 
 void loop() {
   static uint32_t lastCheck = 0;
@@ -117,6 +138,13 @@ void loop() {
     checkMessageTimeout();
     lastCheck = millis();
   }
+  static uint32_t lastSend = 0;
+  if (millis() - lastSend >= 1000) {
+    uint8_t tx_array[6] = {0x41, 0x0B, 0x10, 0x02, 0x64, 0x00};
+    j1850_pwm_transmits(tx_array, 5);
+    lastSend = millis();
+  }
+
 }
 
 void setupJ1850Hardware() {
@@ -494,4 +522,88 @@ void printFrame(const Frame& f, uint8_t byteCount) {
     if (i < byteCount - 1) Serial.print(" ");
   }
   Serial.println();
+}
+
+
+
+uint8_t is_active(void) {
+	return digitalRead(J1850_PWM_RX);
+}
+
+void j1850_pwm_active(void) {
+	digitalWrite(J1850P_TX, HIGH);
+	digitalWrite(J1850N_TX, HIGH);
+}
+
+void j1850_pwm_passive(void) {
+  digitalWrite(J1850P_TX, LOW);
+	digitalWrite(J1850N_TX, LOW);
+}
+
+uint8_t crc(uint8_t *msg_buf, int nbytes) {
+	uint8_t crc = 0xFF;
+	while (nbytes--) {
+		crc ^= *msg_buf++;
+		for (int i = 0; i < 8; i++)
+			crc = crc & 0x80 ? (crc << 1) ^ 0x1D : crc << 1;
+	}
+	crc ^= 0xFF;
+	return crc;
+}
+
+static int J1850_transmit(const uint8_t* msg_buf, int nbytes) {
+
+  uint8_t temp_byte;
+  uint8_t nbits;
+   if(nbytes >12) {
+      return -1;  // ERROR_MESSAGE_TO_LONG
+   }
+
+  uint32_t time_rx_ifs_min = micros() + IFS_MIN_US;  // Start time for inter-frame separation
+	while (micros() < time_rx_ifs_min) {
+		if (is_active()) {
+      time_rx_ifs_min = micros() + IFS_MIN_US;
+    }
+	}
+
+  //send Start of Frame (SOF)
+  j1850_pwm_active();
+	delayMicroseconds(TX_SOF_ACTIVE);
+  j1850_pwm_passive();
+  delayMicroseconds(TX_SOF_PASSIVE);
+	do {
+		temp_byte = *msg_buf;
+		nbits = 8;
+		while (nbits--) {
+      j1850_pwm_active();
+      delayMicroseconds((temp_byte & 0x80) ? TX_SHORT : TX_LONG);
+      j1850_pwm_passive();
+      delayMicroseconds((temp_byte & 0x80) ? TX_LONG : TX_SHORT);
+			// if (nbits & 1) {
+			// 	j1850_pwm_passive();
+			// 	delayMicroseconds((temp_byte & 0x80) ? TX_LONG : TX_SHORT);
+			// } else {
+			// 	j1850_pwm_active();
+			// 	delayMicroseconds((temp_byte & 0x80) ? TX_SHORT : TX_LONG);
+			// }
+			temp_byte <<= 1;
+		}
+		++msg_buf;
+	} while (--nbytes);
+
+	j1850_pwm_passive();
+	delayMicroseconds(TX_EOF);
+  return 0;  // Return 0 to indicate no transmission
+}
+
+void j1850_pwm_transmits(uint8_t* data, int nbytes) {
+  // This function is not used in this version - no sending capability
+
+  data[nbytes] = crc(data, nbytes);  // Call CRC function to avoid unused function warning
+
+  nbytes++;  // Increment length for CRC byte
+  J1850_transmit(data, nbytes);
+  // start_timer();
+  // while (read_timer() < 100000) {
+  // }
 }
