@@ -124,8 +124,9 @@ void setup() {
   }
   initTimer();
   // attachInterrupt(J1850_PWM_RX, handlePWMInput, CHANGE);
-  Serial.println("code started");
 
+  Serial.println("code started");
+  j1850_pwm_passive();  // Default to passive state
 }
 
 
