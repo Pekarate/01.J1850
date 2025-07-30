@@ -5,7 +5,7 @@
  * Version: 13.4 - Fixed Duplicate Functions & Capture All Data
  * Date: 2025
  */
-// #define ARDUINO_BOARD 
+#define ARDUINO_BOARD 
 // ============================================================================
 // SAM3X COMPATIBILITY
 // ============================================================================
@@ -16,6 +16,7 @@
 // J1850 PWM TIMING CONSTANTS (Based on SAE J1850 Standard Table 3)
 // CRITICAL: All timing is based on RISING EDGES (passive to active transitions)
 
+#include "tim.hpp"
 
 // Timing tolerance for better accuracy
 #define TIMING_TOLERANCE_PERCENT  10    // ±10% tolerance for timing validation
@@ -121,9 +122,9 @@ void setup() {
   for (uint8_t i = 0; i < 4; i++) {
     edgeTimestamps[i] = 0;
   }
-  
-  attachInterrupt(J1850_PWM_RX, handlePWMInput, CHANGE);
-
+  initTimer();
+  // attachInterrupt(J1850_PWM_RX, handlePWMInput, CHANGE);
+  Serial.println("code started");
 
 }
 
@@ -131,6 +132,9 @@ void setup() {
 
 
 void loop() {
+
+  
+  
   static uint32_t lastCheck = 0;
 
   if ((millis() - lastCheck) > 1) {
@@ -139,7 +143,7 @@ void loop() {
     lastCheck = millis();
   }
   static uint32_t lastSend = 0;
-  if (millis() - lastSend >= 1000) {
+  if (millis() - lastSend >= 100) {
     uint8_t tx_array[6] = {0x41, 0x0B, 0x10, 0x02, 0x64, 0x00};
     j1850_pwm_transmits(tx_array, 5);
     lastSend = millis();
@@ -530,14 +534,18 @@ uint8_t is_active(void) {
 	return digitalRead(J1850_PWM_RX);
 }
 
-void j1850_pwm_active(void) {
-	digitalWrite(J1850P_TX, HIGH);
-	digitalWrite(J1850N_TX, HIGH);
+static inline void j1850_pwm_active(void) {
+	// digitalWrite(J1850P_TX, HIGH);
+  REG_PIOB_SODR = (1 << 14);
+	// digitalWrite(J1850N_TX, HIGH);
+  REG_PIOA_SODR = (1 << 16);  // Đặt bit 16 của Port A lên HIGH
 }
 
-void j1850_pwm_passive(void) {
-  digitalWrite(J1850P_TX, LOW);
-	digitalWrite(J1850N_TX, LOW);
+static inline void j1850_pwm_passive(void) {
+  // digitalWrite(J1850P_TX, LOW);
+  REG_PIOB_CODR = (1 << 14);
+	// digitalWrite(J1850N_TX, LOW);
+  REG_PIOA_CODR = (1 << 16);  // Đặt bit 16 của Port A xuống LOW
 }
 
 uint8_t crc(uint8_t *msg_buf, int nbytes) {
@@ -559,26 +567,29 @@ static int J1850_transmit(const uint8_t* msg_buf, int nbytes) {
       return -1;  // ERROR_MESSAGE_TO_LONG
    }
 
-  uint32_t time_rx_ifs_min = micros() + IFS_MIN_US;  // Start time for inter-frame separation
-	while (micros() < time_rx_ifs_min) {
+  uint32_t time_rx_ifs_min = getMicros() + IFS_MIN_US;  // Start time for inter-frame separation
+	while (getMicros() < time_rx_ifs_min) {
 		if (is_active()) {
-      time_rx_ifs_min = micros() + IFS_MIN_US;
+      time_rx_ifs_min = getMicros() + IFS_MIN_US;
     }
 	}
-
+  // while(1) {
+  //   j1850_pwm_active();
+  //   j1850_pwm_passive();
+  // }
   //send Start of Frame (SOF)
   j1850_pwm_active();
-	delayMicroseconds(TX_SOF_ACTIVE);
+  delayus(TX_SOF_ACTIVE);
   j1850_pwm_passive();
-  delayMicroseconds(TX_SOF_PASSIVE);
-	do {
+  delayus(TX_SOF_PASSIVE);
+  do {
 		temp_byte = *msg_buf;
 		nbits = 8;
 		while (nbits--) {
       j1850_pwm_active();
-      delayMicroseconds((temp_byte & 0x80) ? TX_SHORT : TX_LONG);
+      delayus((temp_byte & 0x80) ? TX_SHORT : TX_LONG);
       j1850_pwm_passive();
-      delayMicroseconds((temp_byte & 0x80) ? TX_LONG : TX_SHORT);
+      delayus((temp_byte & 0x80) ? TX_LONG : TX_SHORT);
 			// if (nbits & 1) {
 			// 	j1850_pwm_passive();
 			// 	delayMicroseconds((temp_byte & 0x80) ? TX_LONG : TX_SHORT);
