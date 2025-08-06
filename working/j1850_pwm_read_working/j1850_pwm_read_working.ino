@@ -123,6 +123,11 @@ void setup() {
     edgeTimestamps[i] = 0;
   }
   initTimer();
+
+  // Configure PC18 and PC23 as outputs
+  REG_PIOC_PER |= (1 << 18) | (1 << 23);  // Enable PIO control
+  REG_PIOC_OER |= (1 << 18) | (1 << 23);  // Set as outputs 
+  REG_PIOC_PUDR |= (1 << 18) | (1 << 23); // Disable pull-up resistors
   // attachInterrupt(J1850_PWM_RX, handlePWMInput, CHANGE);
 
   Serial.println("code started");
@@ -162,6 +167,11 @@ void setupJ1850Hardware() {
   digitalWrite(J1850_PWM_VPW, HIGH);       // LOW  = ~7.9v (VPW)
                                       // HIGH = ~5.9V (PWM)
 
+  REG_PIOC_PER |= (1 << 18) | (1 << 23);  // Enable PIO control
+  REG_PIOC_OER |= (1 << 18) | (1 << 23);  // Set as outputs
+  REG_PIOC_PUDR |= (1 << 18) | (1 << 23); // Disable pull-up resistors
+
+  j1850_pwm_passive();  // Default to passive state
   delay(500);
 }
 
@@ -537,16 +547,16 @@ uint8_t is_active(void) {
 
 static inline void j1850_pwm_active(void) {
 	// digitalWrite(J1850P_TX, HIGH);
-  REG_PIOB_SODR = (1 << 14);
+  REG_PIOC_SODR = (1 << 18);  // Set bit 18 of Port C HIGH
 	// digitalWrite(J1850N_TX, HIGH);
-  REG_PIOA_SODR = (1 << 16);  // Đặt bit 16 của Port A lên HIGH
+  REG_PIOC_SODR = (1 << 23);  // Set bit 23 of Port C HIGH
 }
 
 static inline void j1850_pwm_passive(void) {
   // digitalWrite(J1850P_TX, LOW);
-  REG_PIOB_CODR = (1 << 14);
-	// digitalWrite(J1850N_TX, LOW);
-  REG_PIOA_CODR = (1 << 16);  // Đặt bit 16 của Port A xuống LOW
+  REG_PIOC_CODR = (1 << 18);  // Set bit 18 of Port C LOW
+  // digitalWrite(J1850N_TX, LOW);
+  REG_PIOC_CODR = (1 << 23);  // Set bit 23 of Port C LOW
 }
 
 uint8_t crc(uint8_t *msg_buf, int nbytes) {
